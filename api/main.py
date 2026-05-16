@@ -36,62 +36,79 @@ def get_spotify_token():
         return res.json().get("access_token")
     return None
 
-def fetch_spotify_metadata(spotify_url, token):
-    match = re.search(r"track/([a-zA-Z0-9]+)", spotify_url)
-    if not match:
-        return None
-    track_id = match.group(1)
-    
-    url = f"https://api.spotify.com/v1/tracks/{track_id}"
+def fetch_spotify_metadata(url_type, track_id, token):
+    url = f"https://api.spotify.com/v1/{url_type}s/{track_id}"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers)
     
     if res.status_code == 200:
         data = res.json()
-        title = data.get("name")
-        artist = data.get("artists")[0].get("name") if data.get("artists") else "Unknown"
-        cover_image = data.get("album", {}).get("images", [{}])[0].get("url", "")
-        return {"title": title, "artist": artist, "cover": cover_image, "query": f"{title} {artist} audio"}
+        if url_type == 'track':
+            title = data.get("name")
+            artist = data.get("artists")[0].get("name") if data.get("artists") else "Unknown"
+            cover_image = data.get("album", {}).get("images", [{}])[0].get("url", "")
+            duration_ms = data.get("duration_ms", 0)
+            return {
+                "type": "track",
+                "title": title,
+                "artist": artist,
+                "cover": cover_image,
+                "duration": duration_ms,
+                "query": f"{title} {artist} audio"
+            }
     return None
 
-class TrackRequest(BaseModel):
+class InfoRequest(BaseModel):
     url: str
 
-@app.post("/api/analyze")
-async def analyze_track(request: TrackRequest):
+# Claude ki main.js is endpoint (/api/info) ko dhoond rahi hai
+@app.post("/api/info")
+async def get_info(request: InfoRequest):
     token = get_spotify_token()
     if not token:
-        raise HTTPException(status_code=500, detail="Spotify API authentication failed")
+        raise HTTPException(status_code=500, detail="Spotify Auth Failed")
     
-    metadata = fetch_spotify_metadata(request.url, token)
+    match = re.search(r"open\.spotify\.com\/(track|album|playlist)\/([A-Za-z0-9]+)", request.url)
+    if not match:
+        raise HTTPException(status_code=400, detail="Invalid Spotify URL structure")
+        
+    url_type = match.group(1)
+    track_id = match.group(2)
+    
+    # Abhi track handle karte hain jo main feature hai
+    metadata = fetch_spotify_metadata(url_type, track_id, token)
     if not metadata:
-        raise HTTPException(status_code=400, detail="Invalid Spotify Link")
-    
-    return metadata
+        raise HTTPException(status_code=404, detail="Track data not found")
+        
+    return JSONResponse(metadata)
 
-@app.get("/api/download")
-async def download_track(q: str = Query(...)):
+# Claude ki main.js download ke liye POST request bhejti hai json body ke sath
+class DownloadRequest(BaseModel):
+    query: str
+    title: str = "audio"
+
+@app.post("/api/download")
+async def download_track(request: DownloadRequest):
     ydl_opts = {
         'format': 'bestaudio/best',
         'default_search': 'ytsearch',
         'noplaylist': True,
         'quiet': True,
-        'extract_flat': False,
         'skip_download': True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{q}", download=False)
+            info = ydl.extract_info(f"ytsearch:{request.query}", download=False)
             if not info or 'entries' not in info or len(info['entries']) == 0:
-                raise HTTPException(status_code=404, detail="Audio not found")
+                raise HTTPException(status_code=404, detail="Audio track not found")
                 
             video_info = info['entries'][0]
             audio_url = video_info.get('url')
-            title = video_info.get('title', 'audio')
             
             return JSONResponse({
-                "download_url": audio_url,
-                "title": f"{title}.mp3"
+                "success": True,
+                "url": audio_url,
+                "title": f"{request.title}.mp3"
             })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
