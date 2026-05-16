@@ -2,7 +2,6 @@ import os
 import re
 import base64
 import requests
-import asyncio
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -77,11 +76,12 @@ async def download_track(q: str = Query(...)):
         'default_search': 'ytsearch',
         'noplaylist': True,
         'quiet': True,
+        'extract_flat': False,
+        'skip_download': True,
     }
     try:
-        loop = asyncio.get_event_loop()
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch:{q}", download=False))
+            info = ydl.extract_info(f"ytsearch:{q}", download=False)
             if not info or 'entries' not in info or len(info['entries']) == 0:
                 raise HTTPException(status_code=404, detail="Audio not found")
                 
